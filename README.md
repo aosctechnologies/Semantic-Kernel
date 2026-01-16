@@ -1,1 +1,1 @@
-# Semantic-Kernel
+# semantic-agent
