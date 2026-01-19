@@ -10,7 +10,7 @@ class QueuePlugin:
     
     @kernel_function(
         name="process_items_queue",
-        description="Process a list of items sequentially and log structured results."
+        description="Process a list of items sequentially and log structured results for every file."
     )
     async def process_items_queue(
         self,
@@ -19,22 +19,25 @@ class QueuePlugin:
         run_id: str
     ) -> List[Dict[str, Any]]:
         detailed_results = []
-        # INITIALIZE final_log here to prevent NameError
-        final_log = "No items processed" 
+        log_lines = []
         
+        # Guard against empty input
+        if not project_ids or not workbook_ids:
+            return [{"error": "Missing ID lists"}]
+
         async with await get_client() as client:
-            for pid, wid in zip(project_ids, workbook_ids):
+            # Enumerate allows us to track "file 1", "file 2", etc.
+            for i, (pid, wid) in enumerate(zip(project_ids, workbook_ids)):
                 project_status = {
                     "project_id": pid,
                     "workbook_id": wid,
-                    "steps": {
-                        "assessment": "PENDING",
-                        "parsing": "SKIPPED",
-                        "mapping": "SKIPPED"
-                    },
-                    "final_status": "PENDING",
-                    "error_details": None
+                    "steps": {"assessment": "PENDING", "parsing": "SKIPPED", "mapping": "SKIPPED"},
+                    "final_status": "PENDING"
                 }
+                
+                # Start the detailed chain for this specific file
+                file_label = f"file {i+1} ({pid})"
+                current_chain = [file_label]
 
                 # --- STEP 1: ASSESSMENT ---
                 try:
@@ -45,75 +48,64 @@ class QueuePlugin:
                     )
                     res.raise_for_status()
                     project_status["steps"]["assessment"] = "COMPLETED"
-                except Exception as e:
-                    project_status["steps"]["assessment"] = "FAILED"
-                    project_status["final_status"] = "FAILED"
-                    project_status["error_details"] = f"Assessment Error: {str(e)}"
-                    detailed_results.append(project_status)
-                    continue
+                    current_chain.append("assessment pass")
+                    
+                    # --- STEP 2: PARSING ---
+                    try:
+                        res = await client.post(
+                            f"{settings.PARSING_API_URL}/parse-xml", 
+                            json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
+                            timeout=60.0
+                        )
+                        res.raise_for_status()
+                        project_status["steps"]["parsing"] = "COMPLETED"
+                        current_chain.append("parsing pass")
 
-                # --- STEP 2: PARSING ---
-                project_status["steps"]["parsing"] = "PENDING"
-                try:
-                    res = await client.post(
-                        f"{settings.PARSING_API_URL}/parse-xml", 
-                        json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
-                        timeout=60.0
-                    )
-                    res.raise_for_status()
-                    project_status["steps"]["parsing"] = "COMPLETED"
-                except Exception as e:
-                    project_status["steps"]["parsing"] = "FAILED"
-                    project_status["final_status"] = "FAILED"
-                    project_status["error_details"] = f"Parsing Error: {str(e)}"
-                    detailed_results.append(project_status)
-                    continue
+                        # --- STEP 3: MAPPING ---
+                        try:
+                            res = await client.post(
+                                f"{settings.MAPPING_API_URL}/mapping", 
+                                json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
+                                timeout=60.0
+                            )
+                            res.raise_for_status()
+                            project_status["steps"]["mapping"] = "COMPLETED"
+                            project_status["final_status"] = "SUCCESS"
+                            current_chain.append("mapping pass")
+                        except Exception as e:
+                            project_status["final_status"] = "WARNING"
+                            current_chain.append(f"mapping error: {str(e)}")
 
-                # --- STEP 3: MAPPING ---
-                project_status["steps"]["mapping"] = "PENDING"
-                try:
-                    res = await client.post(
-                        f"{settings.MAPPING_API_URL}/mapping", 
-                        json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
-                        timeout=60.0
-                    )
-                    res.raise_for_status()
-                    project_status["steps"]["mapping"] = "COMPLETED"
-                    project_status["final_status"] = "SUCCESS"
+                    except Exception as e:
+                        project_status["final_status"] = "FAILED"
+                        current_chain.append(f"parsing error: {str(e)}")
+
                 except Exception as e:
-                    project_status["steps"]["mapping"] = "FAILED"
-                    project_status["final_status"] = "WARNING"
-                    project_status["error_details"] = f"Mapping Error: {str(e)}"
+                    project_status["final_status"] = "FAILED"
+                    current_chain.append(f"assessment error: {str(e)}")
 
                 detailed_results.append(project_status)
+                # Combine the chain for this file (e.g., "file 1 -> assessment pass -> ...")
+                log_lines.append(" -> ".join(current_chain))
 
-            # --- CONSTRUCT FINAL LOG TEXT AFTER LOOP ---
-            if detailed_results:
-                log_lines = []
-                for res in detailed_results:
-                    icon = "✅" if res["final_status"] == "SUCCESS" else "❌"
-                    if res["final_status"] == "WARNING": icon = "⚠️"
-                    log_lines.append(f"{icon} Project {res['project_id']}: {res['final_status']}")
-                final_log = "\n".join(log_lines)
+            # --- CONSTRUCT FINAL LOG FOR MONGODB ---
+            final_log_content = "\n".join(log_lines)
 
-            # --- LOG TO MONGODB ---
             log_payload = {
-                "project_name": project_ids[0] if project_ids else "Batch",
+                "project_name": "Batch Process",
                 "run_id": run_id,
                 "agent_name": "Semantic Kernel Queue Agent",
                 "log_level": "INFO",
-                "message": "Batch process summary",
-                "project_id": project_ids[0] if project_ids else "",
-                "workbook_id": workbook_ids[0] if workbook_ids else "",
+                "message": f"Processed {len(project_ids)} files",
                 "details": {
-                    "log_content": final_log, # Now guaranteed to be defined
+                    "log_content": final_log_content,
                     "timestamp": datetime.utcnow().isoformat(),
                     "status": "COMPLETED"
                 }
             }
             
             try:
-                # Update endpoint to /logs
+                # Log to the specific /logs endpoint
                 await client.post(f"{settings.MONGODB_LOG_API_URL}/api/records/logs", json=log_payload)
             except Exception as e:
                 print(f"Logging Error: {e}")
