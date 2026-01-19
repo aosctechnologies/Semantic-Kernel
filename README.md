@@ -1,107 +1,73 @@
-# 🚀 Semantic Agent – Workflow Automation with Semantic Kernel
+# Semantic Agent - Workflow Automation with Semantic Kernel
 
-A high-performance automation agent built using **Microsoft Semantic Kernel**, **FastAPI**, and **Pydantic**.  
-Designed to orchestrate complex, multi-step workflows—**Assessment → Parsing → Mapping**—for both single requests and batch operations via a queue system.
+This project is a high-performance automation agent built using **Microsoft Semantic Kernel**, **FastAPI**, and **Pydantic**. It is designed to orchestrate complex data processing workflows—Assessment, Parsing, and Mapping—either for single items or in batch mode via a queue system.
 
----
+## 🚀 Key Features
 
-## ✨ Key Features
+* **Workflow Orchestration**: Enforces a strict linear process: `Assessment` → `Parsing` → `Mapping`.
+* **Batch Processing**: Handles multiple `project_id` and `workbook_id` pairs simultaneously using a specialized Queue Plugin.
+* **Semantic Kernel Integration**: Uses an AI-driven approach to select tools and manage chat history.
+* **External API Integration**: Connects with OpenRouter for LLM services and multiple microservices for data processing.
+* **Centralized Logging**: Automatically logs all batch execution results and errors to a MongoDB-backed logging API.
 
-### 🔄 Workflow Orchestration  
-Strict linear workflow: **Assessment → Parsing → Mapping**
+## 🛠 Project Structure
 
-### 📦 Batch Processing  
-Processes multiple `project_id` + `workbook_id` pairs using a **Queue Plugin**
-
-### 🧠 Semantic Kernel Integration  
-AI-powered tool selection, workflow execution, and chat-based interaction
-
-### 🌐 External API Integrations  
-- OpenRouter LLM  
-- Assessment API  
-- Parsing API  
-- Mapping API  
-- MongoDB Logging API  
-
-### 📝 Centralized Logging  
-All workflow results and errors logged to a MongoDB-backed service
-
----
-
-## 📂 Project Structure
-
-project-root/
-│
-├── main.py # FastAPI entry point
-│
-├── kernel/
-│ └── kernel_setup.py # Semantic Kernel configuration
-│
-├── plugins/
-│ ├── assessment.py # Assessment logic
-│ ├── parsing.py # XML parsing logic
-│ ├── mapping.py # Mapping execution
-│ └── queue_handler.py # Batch queue processing + logging
-│
-├── config/
-│ ├── settings.py # Env variables (Pydantic Settings)
-│ └── prompts.py # SYSTEM_PROMPT for LLM
-│
-├── models/
-│ └── schemas.py # Pydantic request/response models
-│
-└── services/
-└── http_client.py # Shared async httpx client
-
-
----
+* **`main.py`**: The entry point; defines FastAPI endpoints for chat-based interaction (`/chat`) and direct batch processing (`/invoke-batch`).
+* **`kernel/kernel_setup.py`**: Configures the Semantic Kernel, sets up the AI service via OpenRouter, and registers the plugins.
+* **`plugins/`**: Contains the core logic for the agent's capabilities:
+    * **`assessment.py`**: Validates project and workbook IDs via an assessment API.
+    * **`parsing.py`**: Handles XML data parsing requests.
+    * **`mapping.py`**: Manages data mapping operations.
+    * **`queue_handler.py`**: Orchestrates sequential execution for batch requests and logs results to MongoDB.
+* **`config/`**:
+    * **`settings.py`**: Manages environment variables and API endpoints using Pydantic Settings.
+    * **`prompts.py`**: Defines the `SYSTEM_PROMPT` that governs the agent's behavior and workflow rules.
+* **`models/schemas.py`**: Defines Pydantic models for request and response validation, including Queue and Chat schemas.
+* **`services/http_client.py`**: Provides a shared, optimized `httpx.AsyncClient` for all outgoing API calls.
 
 ## 📋 Prerequisites
 
-- Python **3.10+**
-- OpenRouter API Key  
-- Access to: Assessment, Parsing, Mapping, and MongoDB API services
-
----
+* Python 3.10+
+* An OpenRouter API Key
+* Access to the required microservices (Assessment, Parsing, Mapping, and MongoDB Log APIs)
 
 ## ⚙️ Setup
 
-### 1️⃣ Clone the repository
+1.  **Clone the repository.**
+2.  **Install dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *(Includes `fastapi`, `semantic-kernel`, `httpx`, and `pydantic-settings`)*.
+3.  **Configure Environment Variables**: Create a `.env` file in the root directory (excluded by `.gitignore`) with the following keys:
+    ```env
+    OPENROUTER_API_KEY=your_key_here
+    OPENROUTER_BASE_URL=[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
+    ASSESSMENT_API_URL=http://your-service-url
+    PARSING_API_URL=http://your-service-url
+    MAPPING_API_URL=http://your-service-url
+    MONGODB_LOG_API_URL=http://your-log-service-url
+    REQUEST_TIMEOUT=60.0
+    ```
+    *(Refer to `config/settings.py` for all required fields)*.
+
+## 🚀 Running the Application
+
+Start the server using Uvicorn:
 ```bash
-git clone <your-repo-url>
-cd <project-folder>
-
-2️⃣ Install dependencies
-pip install -r requirements.txt
-
-3️⃣ Create a .env file
-OPENROUTER_API_KEY=your_key_here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-
-ASSESSMENT_API_URL=http://your-service-url
-PARSING_API_URL=http://your-service-url
-MAPPING_API_URL=http://your-service-url
-MONGODB_LOG_API_URL=http://your-log-service-url
-
-REQUEST_TIMEOUT=60.0
-
-🚀 Running the Application
-
-Start the API server:
-
 python main.py
 
-
-Server runs at:
-
-http://0.0.0.0:9000
+The API will be available at http://0.0.0.0:9000.
 
 🔌 API Endpoints
-1. Batch Invocation — /invoke-batch
+1. Batch Invocation (/invoke-batch)
+Directly triggers the processing queue for multiple items without going through the LLM.
 
-Trigger batch processing without the LLM.
+Method: POST
 
-POST Body:
+Payload:
+
+JSON
 
 {
   "items": [
@@ -109,44 +75,19 @@ POST Body:
     {"project_id": "uuid3", "workbook_id": "uuid4"}
   ]
 }
+2. AI Chat (/chat)
+Engage with the agent using natural language. The agent will decide whether to run a single workflow or a batch queue based on your input.
 
-2. AI Chat — /chat
+Method: POST
 
-Use natural language; the agent decides single vs batch processing.
+Payload: {"message": "Process these projects..."}
 
-POST Body:
-
-{"message": "Process these projects..."}
-
-3. Health Check — /health
-
-Returns kernel and conversation status.
+3. Health Check (/health)
+Returns the status of the kernel and conversation history.
 
 🤖 Workflow Logic
-Single Item
+The agent follows a strict execution policy defined in the system prompt:
 
-Assessment
+Single Item: Sequentially calls run_assessment → parse_xml_data → run_mapping.
 
-Parsing
-
-Mapping
-
-Batch Mode
-
-Extract all IDs
-
-Queue processing via process_items_queue
-
-Strict sequential execution
-
-Full logging to MongoDB
-
-⭐ Ideal For
-
-Automated microservice workflows
-
-AI-driven orchestration
-
-Batch processing
-
-Semantic Kernel developers
+Lists/Arrays: Extracts all IDs and delegates the entire batch to the process_items_queue tool in QueuePlugin to ensure efficiency and automated logging.
