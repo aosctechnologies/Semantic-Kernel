@@ -5,6 +5,7 @@ import uuid
 from typing import List
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
 
@@ -22,6 +23,19 @@ from plugins.queue_handler import QueuePlugin
 from services.http_client import get_client
 
 app = FastAPI(title="Semantic Agent - Assessment First")
+
+# --- CORS Configuration ---
+origins = [
+    "http://localhost:3000",  # Allow your frontend origin
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],      # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],      # Allow all headers
+)
 
 kernel: Kernel = None
 chat_history: ChatHistory = ChatHistory()
@@ -48,7 +62,7 @@ async def startup_event():
         print(f"Kernel initialization failed: {str(e)}")
         raise
 
-# --- UPDATED ENDPOINT WITH MONGODB LOGGING ALIGNED TO AgentLog ---
+# --- UPDATED ENDPOINT WITH MONGODB LOGGING ALIGNED TO AgentResultCreate ---
 @app.post("/invoke-batch")
 async def invoke_batch(request: QueueRequest):
     """
@@ -70,47 +84,37 @@ async def invoke_batch(request: QueueRequest):
 
     try:
         # 1. Call the plugin logic
-        # result_log now returns a list of dicts based on the updated plugin
-        detailed_results = await queue_plugin.process_items_queue(
+        result_log = await queue_plugin.process_items_queue(
             project_ids=project_ids, 
             workbook_ids=workbook_ids,
             run_id=run_id
         )
 
-        # 2. Construct the log text for console and the 'details' field
-        log_summary = "\n".join([
-            f"Project: {res['project_id']} | Status: {res['final_status']}"
-            for res in detailed_results
-        ])
-
+        # 2. Construct the exact log format requested
         full_record_text = (
             f"Invoking Batch | Run ID: {run_id}\n"
             f"--- Log for Run {run_id} ---\n"
-            f"{log_summary}\n"
+            f"{result_log}\n"
             f"-----------------------------\n"
             f"Batch Invocation Complete | Run ID: {run_id}"
         )
 
+        # Print to console
         print(full_record_text)
 
-        # 3. POST the record to MongoDB API using the /logs endpoint
+        # 3. POST the record to MongoDB API using AgentResultCreate schema
         try:
             async with await get_client() as client:
                 await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/logs",
+                    f"{settings.MONGODB_LOG_API_URL}/api/records/validation",
                     json={
-                        "project_name": project_ids[0] if project_ids else "Batch",
-                        "run_id": run_id,
-                        "agent_name": "Main Batch Agent",
-                        "log_level": "INFO",
-                        "message": "Batch Invocation Complete",
-                        "project_id": project_ids[0] if project_ids else "",
-                        "workbook_id": workbook_ids[0] if workbook_ids else "",
-                        "details": {
-                            "type": "BATCH_INVOCATION",
-                            "full_log": full_record_text,
+                        "project_name": "Semantic-Kernel-Agent",  # Required field
+                        "run_id": run_id,                         # Required field
+                        "status": "completed",                    # Required field
+                        "payload": {                              # Required field (Dict)
+                            "full_console_output": full_record_text,
                             "processed_items": items_run,
-                            "status": "SUCCESS"
+                            "timestamp": datetime.utcnow().isoformat()
                         }
                     },
                     timeout=10.0
@@ -133,14 +137,12 @@ async def invoke_batch(request: QueueRequest):
         try:
             async with await get_client() as client:
                 await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/logs",
+                    f"{settings.MONGODB_LOG_API_URL}/api/records/validation",
                     json={
-                        "project_name": "Semantic-Kernel-Error",
+                        "project_name": "Semantic-Kernel-Agent-Error",
                         "run_id": run_id,
-                        "agent_name": "Main Batch Agent",
-                        "log_level": "ERROR",
-                        "message": f"Batch process failed: {str(e)}",
-                        "details": {
+                        "status": "failed",
+                        "payload": {
                             "error": str(e),
                             "stack_trace": error_detail,
                             "timestamp": datetime.utcnow().isoformat()
@@ -218,4 +220,4 @@ async def reset_conversation():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=9000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=9000, reload=True)

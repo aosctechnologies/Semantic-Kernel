@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     # Configuration (Required)
     REQUEST_TIMEOUT: float
+    CORS_ORIGINS: str = "*"
 
     model_config = SettingsConfigDict(
         # This tells Pydantic to read the .env file from the project root

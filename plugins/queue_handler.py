@@ -111,3 +111,5 @@ class QueuePlugin:
                 print(f"Logging Error: {e}")
 
         return detailed_results
+
+    
