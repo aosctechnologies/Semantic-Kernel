@@ -90,4 +90,4 @@ The agent follows a strict execution policy defined in the system prompt:
 
 Single Item: Sequentially calls run_assessment → parse_xml_data → run_mapping.
 
-Lists/Arrays: Extracts all IDs and delegates the entire batch to the process_items_queue tool in QueuePlugin to ensure efficiency and automated logging.
+Lists/Arrays: Extracts all IDs and delegates the entire batch to the process_items_queue tool in QueuePlugin to ensure efficiency and automated logging.  
