@@ -106,7 +106,7 @@ async def invoke_batch(request: QueueRequest):
         try:
             async with await get_client() as client:
                 await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/validation",
+                    f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel",
                     json={
                         "project_name": "Semantic-Kernel-Agent",  # Required field
                         "run_id": run_id,                         # Required field
@@ -137,7 +137,7 @@ async def invoke_batch(request: QueueRequest):
         try:
             async with await get_client() as client:
                 await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/validation",
+                    f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel",
                     json={
                         "project_name": "Semantic-Kernel-Agent-Error",
                         "run_id": run_id,

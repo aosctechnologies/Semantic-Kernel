@@ -10,7 +10,7 @@ class QueuePlugin:
     
     @kernel_function(
         name="process_items_queue",
-        description="Process a list of items sequentially and log structured results for every file."
+        description="Process items sequentially and log results to MongoDB."
     )
     async def process_items_queue(
         self,
@@ -21,12 +21,10 @@ class QueuePlugin:
         detailed_results = []
         log_lines = []
         
-        # Guard against empty input
         if not project_ids or not workbook_ids:
             return [{"error": "Missing ID lists"}]
 
         async with await get_client() as client:
-            # Enumerate allows us to track "file 1", "file 2", etc.
             for i, (pid, wid) in enumerate(zip(project_ids, workbook_ids)):
                 project_status = {
                     "project_id": pid,
@@ -35,38 +33,34 @@ class QueuePlugin:
                     "final_status": "PENDING"
                 }
                 
-                # Start the detailed chain for this specific file
                 file_label = f"file {i+1} ({pid})"
                 current_chain = [file_label]
 
-                # --- STEP 1: ASSESSMENT ---
+                # Step 1: Assessment
                 try:
                     res = await client.post(
                         f"{settings.ASSESSMENT_API_URL}/api/assessment", 
-                        json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
-                        timeout=60.0
+                        json={"project_id": pid, "workbook_id": wid, "run_id": run_id}
                     )
                     res.raise_for_status()
                     project_status["steps"]["assessment"] = "COMPLETED"
                     current_chain.append("assessment pass")
                     
-                    # --- STEP 2: PARSING ---
+                    # Step 2: Parsing
                     try:
                         res = await client.post(
                             f"{settings.PARSING_API_URL}/parse-xml", 
-                            json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
-                            timeout=60.0
+                            json={"project_id": pid, "workbook_id": wid, "run_id": run_id}
                         )
                         res.raise_for_status()
                         project_status["steps"]["parsing"] = "COMPLETED"
                         current_chain.append("parsing pass")
 
-                        # --- STEP 3: MAPPING ---
+                        # Step 3: Mapping
                         try:
                             res = await client.post(
                                 f"{settings.MAPPING_API_URL}/mapping", 
-                                json={"project_id": pid, "workbook_id": wid, "run_id": run_id},
-                                timeout=60.0
+                                json={"project_id": pid, "workbook_id": wid, "run_id": run_id}
                             )
                             res.raise_for_status()
                             project_status["steps"]["mapping"] = "COMPLETED"
@@ -85,31 +79,30 @@ class QueuePlugin:
                     current_chain.append(f"assessment error: {str(e)}")
 
                 detailed_results.append(project_status)
-                # Combine the chain for this file (e.g., "file 1 -> assessment pass -> ...")
                 log_lines.append(" -> ".join(current_chain))
 
-            # --- CONSTRUCT FINAL LOG FOR MONGODB ---
+            # --- CORRECT MONGODB LOGGING PART ---
             final_log_content = "\n".join(log_lines)
-
+            
+            # This follows the specific log record schema for MongoDB
             log_payload = {
-                "project_name": "Batch Process",
+                "project_name": "Semantic-Kernel-Agent",
                 "run_id": run_id,
-                "agent_name": "Semantic Kernel Queue Agent",
-                "log_level": "INFO",
-                "message": f"Processed {len(project_ids)} files",
-                "details": {
-                    "log_content": final_log_content,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "status": "COMPLETED"
+                "status": "completed", 
+                "payload": {
+                    "full_console_output": final_log_content,
+                    "processed_items": detailed_results,
+                    "timestamp": datetime.utcnow().isoformat()
                 }
             }
             
             try:
-                # Log to the specific /logs endpoint
-                await client.post(f"{settings.MONGODB_LOG_API_URL}/api/records/logs", json=log_payload)
+                # Log to the validation records endpoint in MongoDB
+                await client.post(
+                    f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel", 
+                    json=log_payload
+                )
             except Exception as e:
-                print(f"Logging Error: {e}")
+                print(f"Critical Logging Error: {e}")
 
         return detailed_results
-
-    
