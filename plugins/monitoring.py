@@ -1,59 +1,41 @@
-# plugins/monitoring.py
+# plugins/monitoring_agent.py
 
 from semantic_kernel.functions import kernel_function
-from config.settings import settings
 from services.http_client import get_client
-from datetime import datetime
+from config.settings import settings # Import settings
+import httpx
 
-class MonitoringPlugin:
+class MonitoringAgentPlugin:
     
     @kernel_function(
-        name="log_event",
-        description="Logs a specific agent event or performance metric to the monitoring API."
+        name="report_to_monitor",
+        description="Sends a status report to the external monitoring agent."
     )
-    async def log_event(
+    async def report_to_monitor(
         self,
-        event_name: str,
+        project_id: str,
+        workbook_id: str,
         run_id: str,
-        details: str = ""
+        status: str = "PROCESSED"
     ) -> str:
-        """
-        Sends a monitoring event to the MongoDB/Logging service.
-        """
+        # Use the URL from the .env via settings
+        url = settings.MONITORING_AGENT_URL + "/monitor/report"
+        
         payload = {
+            "project_id": project_id,
+            "workbook_id": workbook_id,
             "run_id": run_id,
-            "event": event_name,
-            "timestamp": datetime.utcnow().isoformat(),
-            "details": details,
-            "type": "MONITORING_LOG"
+            "status": status
         }
 
         try:
             async with await get_client() as client:
-                # Reusing your MONGODB_LOG_API_URL from settings
                 response = await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/monitoring",
+                    url,
                     json=payload,
                     timeout=10.0
                 )
                 response.raise_for_status()
-                return f"Monitoring Log Success: {event_name}"
+                return f"Monitoring Agent notified for Run {run_id}"
         except Exception as e:
-            return f"Monitoring Log Failed: {str(e)}"
-
-    @kernel_function(
-        name="get_run_status",
-        description="Checks the current status of a specific batch run."
-    )
-    async def get_run_status(self, run_id: str) -> str:
-        try:
-            async with await get_client() as client:
-                response = await client.get(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/validation/{run_id}",
-                    timeout=10.0
-                )
-                response.raise_for_status()
-                data = response.json()
-                return f"Run {run_id} status: {data.get('status', 'Unknown')}"
-        except Exception as e:
-            return f"Status Check Failed: {str(e)}"
+            return f"Monitoring Agent Error: {str(e)}"

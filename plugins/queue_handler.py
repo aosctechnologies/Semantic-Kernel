@@ -81,10 +81,24 @@ class QueuePlugin:
                 detailed_results.append(project_status)
                 log_lines.append(" -> ".join(current_chain))
 
-            # --- CORRECT MONGODB LOGGING PART ---
+                # --- NEW: NOTIFY MONITORING AGENT FOR EACH ITEM ---
+                try:
+                    await client.post(
+                        settings.MONITORING_AGENT_URL+"/monitor/report",
+                        json={
+                            "project_id": pid,
+                            "workbook_id": wid,
+                            "run_id": run_id,
+                            "status": project_status["final_status"]
+                        },
+                        timeout=5.0
+                    )
+                except Exception as monitor_err:
+                    print(f"Monitoring Agent notification failed for {pid}: {monitor_err}")
+
+            # --- MONGODB LOGGING PART ---
             final_log_content = "\n".join(log_lines)
             
-            # This follows the specific log record schema for MongoDB
             log_payload = {
                 "project_name": "Semantic-Kernel-Agent",
                 "run_id": run_id,
@@ -97,7 +111,6 @@ class QueuePlugin:
             }
             
             try:
-                # Log to the validation records endpoint in MongoDB
                 await client.post(
                     f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel", 
                     json=log_payload
