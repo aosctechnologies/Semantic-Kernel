@@ -13,9 +13,9 @@ class MonitoringAgentPlugin:
         project_id: str,
         workbook_id: str,
         run_id: str,
-        status: str = "PROCESSED"
+        status: str = "PROCESSED",
+        token: str = None  # Added token parameter
     ) -> str:
-        # Construct endpoint
         url = settings.MONITORING_AGENT_URL + "/monitor/report"
         
         payload = {
@@ -26,7 +26,7 @@ class MonitoringAgentPlugin:
         }
 
         try:
-            async with await get_client() as client:
+            async with await get_client(token=token) as client:
                 response = await client.post(
                     url,
                     json=payload,

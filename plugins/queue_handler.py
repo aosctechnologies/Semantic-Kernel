@@ -17,15 +17,19 @@ class QueuePlugin:
         project_ids: List[str],
         workbook_ids: List[str],
         run_id: str,
-        email: str  # Added to capture the user's email for logging
+        email: str,
+        token: str = None  # Added token parameter
     ) -> List[Dict[str, Any]]:
         detailed_results = []
         log_lines = []
         
+        
+        
         if not project_ids or not workbook_ids:
             return [{"error": "Missing ID lists"}]
 
-        async with await get_client() as client:
+        # Pass the token to get_client to authorize all outgoing requests in this block
+        async with await get_client(token=token) as client:
             for i, (pid, wid) in enumerate(zip(project_ids, workbook_ids)):
                 project_status = {
                     "project_id": pid,
@@ -37,7 +41,7 @@ class QueuePlugin:
                 file_label = f"file {i+1} ({pid})"
                 current_chain = [file_label]
 
-                # Step 1: Assessment - Only pid, wid, and run_id are passed
+                # Step 1: Assessment
                 try:
                     res = await client.post(
                         f"{settings.ASSESSMENT_API_URL}/api/assessment", 
@@ -47,7 +51,7 @@ class QueuePlugin:
                     project_status["steps"]["assessment"] = "COMPLETED"
                     current_chain.append("assessment pass")
                     
-                    # Step 2: Parsing - Only pid, wid, and run_id are passed
+                    # Step 2: Parsing
                     try:
                         res = await client.post(
                             f"{settings.PARSING_API_URL}/parse-xml", 
@@ -57,7 +61,7 @@ class QueuePlugin:
                         project_status["steps"]["parsing"] = "COMPLETED"
                         current_chain.append("parsing pass")
 
-                        # Step 3: Mapping - Only pid, wid, and run_id are passed
+                        # Step 3: Mapping
                         try:
                             res = await client.post(
                                 f"{settings.MAPPING_API_URL}/mapping", 
@@ -82,7 +86,7 @@ class QueuePlugin:
                 detailed_results.append(project_status)
                 log_lines.append(" -> ".join(current_chain))
 
-                # --- NOTIFY MONITORING AGENT FOR EACH ITEM ---
+                # --- NOTIFY MONITORING AGENT ---
                 try:
                     await client.post(
                         settings.MONITORING_AGENT_URL + "/monitor/report",
@@ -97,15 +101,15 @@ class QueuePlugin:
                 except Exception as monitor_err:
                     print(f"Monitoring Agent notification failed for {pid}: {monitor_err}")
 
+
             # --- MONGODB LOGGING ---
-            # The email is included HERE for storage, but not in the processing calls above
             final_log_content = "\n".join(log_lines)
             log_payload = {
                 "project_name": "Semantic-Kernel-Agent",
                 "run_id": run_id,
                 "status": "completed", 
                 "payload": {
-                    "user_email": email,  # Store the email in the log payload
+                    "user_email": email,
                     "full_console_output": final_log_content,
                     "processed_items": detailed_results,
                     "timestamp": datetime.utcnow().isoformat()

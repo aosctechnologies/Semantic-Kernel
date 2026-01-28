@@ -2,12 +2,13 @@
 
 import traceback
 import uuid
-from typing import List
+from typing import List, Optional
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header  # Added Header
 from fastapi.middleware.cors import CORSMiddleware
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
+from semantic_kernel.functions import KernelArguments  # Added for passing token to kernel
 
 # AI Service Imports
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
@@ -25,10 +26,7 @@ from services.http_client import get_client
 app = FastAPI(title="Semantic Agent - Assessment First")
 
 # --- CORS Configuration ---
-origins = [
-    "http://localhost:3000",
-]
-
+origins = ["http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -39,21 +37,12 @@ app.add_middleware(
 
 kernel: Kernel = None
 chat_history: ChatHistory = ChatHistory()
-
-# Initialize the plugin for direct use
 queue_plugin = QueuePlugin()
 
 @app.on_event("startup")
 async def startup_event():
     global kernel
     try:
-        key = settings.OPENROUTER_API_KEY
-        if not key:
-            print("ERROR: OPENROUTER_API_KEY is empty!")
-        else:
-            masked_key = f"{key[:10]}...{key[-5:]}"
-            print(f"Loaded API Key: {masked_key}")
-
         kernel = await create_kernel()
         chat_history.add_system_message(SYSTEM_PROMPT)
         print("Application startup complete.")
@@ -61,15 +50,15 @@ async def startup_event():
         print(f"Kernel initialization failed: {str(e)}")
         raise
 
-# --- UPDATED ENDPOINT TO CAPTURE EMAIL ---
 @app.post("/invoke-batch")
-async def invoke_batch(request: QueueRequest):
+async def invoke_batch(request: QueueRequest, authorization: Optional[str] = Header(None)):
     """
     Directly invokes the batch processing queue. 
-    Captures 'email' for MongoDB logging but does not pass it to processing APIs.
+    Extracts the Bearer token from the Header and passes it to the plugin.
     """
     run_id = str(uuid.uuid4())
-    user_email = request.email # Extract email from request body
+    user_email = request.email
+    token = authorization.replace("Bearer ", "") if authorization else None
     
     print(f"Invoking Batch | Run ID: {run_id} | User: {user_email}")
 
@@ -80,12 +69,12 @@ async def invoke_batch(request: QueueRequest):
         return {"success": False, "message": "No items provided", "run_id": run_id}
 
     try:
-        # 1. Call the plugin logic - email is passed here for the MongoDB log call
         result_log = await queue_plugin.process_items_queue(
             project_ids=project_ids, 
             workbook_ids=workbook_ids,
             run_id=run_id,
-            email=user_email
+            email=user_email,
+            token=token  # Pass the extracted token
         )
 
         return {
@@ -99,9 +88,8 @@ async def invoke_batch(request: QueueRequest):
         error_detail = traceback.format_exc()
         print(f"Batch Invocation Error [Run ID: {run_id}]:", error_detail)
 
-        # Log the failure to MongoDB API including the email
         try:
-            async with await get_client() as client:
+            async with await get_client(token=token) as client:
                 await client.post(
                     f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel",
                     json={
@@ -118,23 +106,21 @@ async def invoke_batch(request: QueueRequest):
         except:
             pass
 
-        return {
-            "success": False,
-            "run_id": run_id,
-            "error": str(e)
-        }
+        return {"success": False, "run_id": run_id, "error": str(e)}
 
-# --- UPDATED CHAT ENDPOINT ---
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, authorization: Optional[str] = Header(None)):
     if kernel is None:
         raise HTTPException(status_code=503, detail="Kernel not initialized yet")
 
     run_id = str(uuid.uuid4())
     user_email = request.email
+    token = authorization.replace("Bearer ", "") if authorization else None
+
+    # Inject token into KernelArguments so plugins can access it
+    args = KernelArguments(token=token)
 
     try:
-        # Inject email into history so plugins/kernel have the context if needed
         chat_history.add_user_message(f"[User Context: {user_email}]")
         chat_history.add_user_message(request.message)
         
@@ -151,24 +137,17 @@ async def chat_endpoint(request: ChatRequest):
         result = await chat_service.get_chat_message_content(
             chat_history=chat_history,
             settings=execution_settings,
-            kernel=kernel 
+            kernel=kernel,
+            arguments=args  # Pass arguments containing the token
         )
 
         final_answer = str(result).strip()
         chat_history.add_assistant_message(final_answer)
 
-        return ChatResponse(
-            response=final_answer,
-            success=True,
-            run_id=run_id
-        )
+        return ChatResponse(response=final_answer, success=True, run_id=run_id)
 
     except Exception as e:
-        return ChatResponse(
-            response=f"Processing error: {str(e)}",
-            success=False,
-            run_id=run_id
-        )
+        return ChatResponse(response=f"Processing error: {str(e)}", success=False, run_id=run_id)
 
 @app.get("/health")
 async def health_check():
