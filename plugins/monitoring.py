@@ -1,9 +1,6 @@
-# plugins/monitoring_agent.py
-
 from semantic_kernel.functions import kernel_function
 from services.http_client import get_client
-from config.settings import settings # Import settings
-import httpx
+from config.settings import settings
 
 class MonitoringAgentPlugin:
     
@@ -18,7 +15,7 @@ class MonitoringAgentPlugin:
         run_id: str,
         status: str = "PROCESSED"
     ) -> str:
-        # Use the URL from the .env via settings
+        # Construct endpoint
         url = settings.MONITORING_AGENT_URL + "/monitor/report"
         
         payload = {

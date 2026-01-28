@@ -10,13 +10,14 @@ class QueuePlugin:
     
     @kernel_function(
         name="process_items_queue",
-        description="Process items sequentially and log results to MongoDB."
+        description="Process items sequentially and log results to MongoDB and Monitoring Agent."
     )
     async def process_items_queue(
         self,
         project_ids: List[str],
         workbook_ids: List[str],
-        run_id: str
+        run_id: str,
+        email: str  # Added to capture the user's email for logging
     ) -> List[Dict[str, Any]]:
         detailed_results = []
         log_lines = []
@@ -36,7 +37,7 @@ class QueuePlugin:
                 file_label = f"file {i+1} ({pid})"
                 current_chain = [file_label]
 
-                # Step 1: Assessment
+                # Step 1: Assessment - Only pid, wid, and run_id are passed
                 try:
                     res = await client.post(
                         f"{settings.ASSESSMENT_API_URL}/api/assessment", 
@@ -46,7 +47,7 @@ class QueuePlugin:
                     project_status["steps"]["assessment"] = "COMPLETED"
                     current_chain.append("assessment pass")
                     
-                    # Step 2: Parsing
+                    # Step 2: Parsing - Only pid, wid, and run_id are passed
                     try:
                         res = await client.post(
                             f"{settings.PARSING_API_URL}/parse-xml", 
@@ -56,7 +57,7 @@ class QueuePlugin:
                         project_status["steps"]["parsing"] = "COMPLETED"
                         current_chain.append("parsing pass")
 
-                        # Step 3: Mapping
+                        # Step 3: Mapping - Only pid, wid, and run_id are passed
                         try:
                             res = await client.post(
                                 f"{settings.MAPPING_API_URL}/mapping", 
@@ -81,10 +82,10 @@ class QueuePlugin:
                 detailed_results.append(project_status)
                 log_lines.append(" -> ".join(current_chain))
 
-                # --- NEW: NOTIFY MONITORING AGENT FOR EACH ITEM ---
+                # --- NOTIFY MONITORING AGENT FOR EACH ITEM ---
                 try:
                     await client.post(
-                        settings.MONITORING_AGENT_URL+"/monitor/report",
+                        settings.MONITORING_AGENT_URL + "/monitor/report",
                         json={
                             "project_id": pid,
                             "workbook_id": wid,
@@ -96,14 +97,15 @@ class QueuePlugin:
                 except Exception as monitor_err:
                     print(f"Monitoring Agent notification failed for {pid}: {monitor_err}")
 
-            # --- MONGODB LOGGING PART ---
+            # --- MONGODB LOGGING ---
+            # The email is included HERE for storage, but not in the processing calls above
             final_log_content = "\n".join(log_lines)
-            
             log_payload = {
                 "project_name": "Semantic-Kernel-Agent",
                 "run_id": run_id,
                 "status": "completed", 
                 "payload": {
+                    "user_email": email,  # Store the email in the log payload
                     "full_console_output": final_log_content,
                     "processed_items": detailed_results,
                     "timestamp": datetime.utcnow().isoformat()

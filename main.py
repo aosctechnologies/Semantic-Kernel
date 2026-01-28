@@ -5,7 +5,7 @@ import uuid
 from typing import List
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from semantic_kernel import Kernel
 from semantic_kernel.contents import ChatHistory
 
@@ -26,15 +26,15 @@ app = FastAPI(title="Semantic Agent - Assessment First")
 
 # --- CORS Configuration ---
 origins = [
-    "http://localhost:3000",  # Allow your frontend origin
+    "http://localhost:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],      # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],      # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 kernel: Kernel = None
@@ -47,10 +47,9 @@ queue_plugin = QueuePlugin()
 async def startup_event():
     global kernel
     try:
-        # Check if the key is actually loaded
         key = settings.OPENROUTER_API_KEY
         if not key:
-            print("ERROR: OPENROUTER_API_KEY is empty! Check your .env file.")
+            print("ERROR: OPENROUTER_API_KEY is empty!")
         else:
             masked_key = f"{key[:10]}...{key[-5:]}"
             print(f"Loaded API Key: {masked_key}")
@@ -62,78 +61,45 @@ async def startup_event():
         print(f"Kernel initialization failed: {str(e)}")
         raise
 
-# --- UPDATED ENDPOINT WITH MONGODB LOGGING ALIGNED TO AgentResultCreate ---
+# --- UPDATED ENDPOINT TO CAPTURE EMAIL ---
 @app.post("/invoke-batch")
 async def invoke_batch(request: QueueRequest):
     """
-    Directly invokes the batch processing queue and logs formatted results to MongoDB API.
+    Directly invokes the batch processing queue. 
+    Captures 'email' for MongoDB logging but does not pass it to processing APIs.
     """
     run_id = str(uuid.uuid4())
-    print(f"Invoking Batch | Run ID: {run_id}")
+    user_email = request.email # Extract email from request body
+    
+    print(f"Invoking Batch | Run ID: {run_id} | User: {user_email}")
 
     project_ids = [item.project_id for item in request.items]
     workbook_ids = [item.workbook_id for item in request.items]
 
     if not project_ids:
-        return {"success": False, "message": "No items provided for batch invoke", "run_id": run_id}
-
-    items_run = [
-        {"project_id": pid, "workbook_id": wid}
-        for pid, wid in zip(project_ids, workbook_ids)
-    ]
+        return {"success": False, "message": "No items provided", "run_id": run_id}
 
     try:
-        # 1. Call the plugin logic
+        # 1. Call the plugin logic - email is passed here for the MongoDB log call
         result_log = await queue_plugin.process_items_queue(
             project_ids=project_ids, 
             workbook_ids=workbook_ids,
-            run_id=run_id
+            run_id=run_id,
+            email=user_email
         )
-
-        # 2. Construct the exact log format requested
-        full_record_text = (
-            f"Invoking Batch | Run ID: {run_id}\n"
-            f"--- Log for Run {run_id} ---\n"
-            f"{result_log}\n"
-            f"-----------------------------\n"
-            f"Batch Invocation Complete | Run ID: {run_id}"
-        )
-
-        # Print to console
-        print(full_record_text)
-
-        # 3. POST the record to MongoDB API using AgentResultCreate schema
-        try:
-            async with await get_client() as client:
-                await client.post(
-                    f"{settings.MONGODB_LOG_API_URL}/api/records/semantic-kernel",
-                    json={
-                        "project_name": "Semantic-Kernel-Agent",  # Required field
-                        "run_id": run_id,                         # Required field
-                        "status": "completed",                    # Required field
-                        "payload": {                              # Required field (Dict)
-                            "full_console_output": full_record_text,
-                            "processed_items": items_run,
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                    },
-                    timeout=10.0
-                )
-        except Exception as log_err:
-            print(f"Failed to send log to MongoDB API: {str(log_err)}")
 
         return {
             "success": True,
             "run_id": run_id,
             "processed_count": len(project_ids),
-            "processed_items": items_run 
+            "user_logged": user_email
         }
 
     except Exception as e:
         error_detail = traceback.format_exc()
         print(f"Batch Invocation Error [Run ID: {run_id}]:", error_detail)
 
-        # Log the failure to MongoDB API
+        # Log the failure to MongoDB API including the email
         try:
             async with await get_client() as client:
                 await client.post(
@@ -143,8 +109,8 @@ async def invoke_batch(request: QueueRequest):
                         "run_id": run_id,
                         "status": "failed",
                         "payload": {
+                            "user_email": user_email,
                             "error": str(e),
-                            "stack_trace": error_detail,
                             "timestamp": datetime.utcnow().isoformat()
                         }
                     }
@@ -158,22 +124,25 @@ async def invoke_batch(request: QueueRequest):
             "error": str(e)
         }
 
-# --- EXISTING CHAT ENDPOINT ---
+# --- UPDATED CHAT ENDPOINT ---
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     if kernel is None:
         raise HTTPException(status_code=503, detail="Kernel not initialized yet")
 
     run_id = str(uuid.uuid4())
-    print(f"Processing Chat Run ID: {run_id}")
+    user_email = request.email
 
     try:
+        # Inject email into history so plugins/kernel have the context if needed
+        chat_history.add_user_message(f"[User Context: {user_email}]")
         chat_history.add_user_message(request.message)
+        
         chat_service = kernel.get_service("openrouter-chat", type=OpenAIChatCompletion)
 
         execution_settings = OpenAIPromptExecutionSettings(
             service_id="openrouter-chat",
-            model_id="google/gemini-2.0-flash-exp:free", 
+            model_id="openai/gpt-4o-mini", 
             temperature=0.0, 
             max_tokens=2000,
             function_choice_behavior=FunctionChoiceBehavior.Auto() 
@@ -195,8 +164,6 @@ async def chat_endpoint(request: ChatRequest):
         )
 
     except Exception as e:
-        error_detail = traceback.format_exc()
-        print(f"Chat error [Run ID: {run_id}]:", error_detail)
         return ChatResponse(
             response=f"Processing error: {str(e)}",
             success=False,
@@ -205,18 +172,14 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
-        "kernel_initialized": kernel is not None,
-        "history_message_count": len(chat_history.messages)
-    }
+    return {"status": "ok", "kernel_initialized": kernel is not None}
 
 @app.post("/reset")
 async def reset_conversation():
     global chat_history
     chat_history = ChatHistory()
     chat_history.add_system_message(SYSTEM_PROMPT)
-    return {"message": "Conversation history reset (system prompt preserved)"}
+    return {"message": "Reset complete"}
 
 if __name__ == "__main__":
     import uvicorn
